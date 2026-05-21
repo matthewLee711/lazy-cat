@@ -1,0 +1,59 @@
+################################################################################
+# AI Bootstrap — Docker Compose
+# Runs Ollama locally with GPU support and auto-pulls Qwen 3 27B
+################################################################################
+
+services:
+  # ── Ollama Server ──────────────────────────────────────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    restart: unless-stopped
+    environment:
+      - OLLAMA_HOST=0.0.0.0
+    # GPU passthrough (ignored gracefully if no NVIDIA GPU present)
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # ── Model Puller (runs once, then exits) ───────────────────────────────────
+  # Waits for Ollama to be healthy, then pulls qwen3:27b if not already present
+  ollama-pull:
+    image: curlimages/curl:latest
+    container_name: ollama-pull
+    depends_on:
+      ollama:
+        condition: service_started
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "⏳ Waiting for Ollama API..."
+        until curl -sf http://ollama:11434/api/tags >/dev/null 2>&1; do
+          sleep 2
+        done
+        echo "✅ Ollama is ready"
+
+        # Check if model already exists
+        if curl -sf http://ollama:11434/api/tags | grep -q "qwen3:27b"; then
+          echo "✅ qwen3:27b already pulled — skipping"
+          exit 0
+        fi
+
+        echo "⬇️  Pulling qwen3:27b (this will take a while on first run)..."
+        curl -sf http://ollama:11434/api/pull \
+          -d '{"name":"qwen3:27b","stream":false}'
+        echo ""
+        echo "✅ qwen3:27b is ready!"
+    restart: "no"
+
+volumes:
+  ollama_data:
+    driver: local
